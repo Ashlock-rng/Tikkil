@@ -2,173 +2,112 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import { supabase } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
 
-const CURRENT_USER_KEY = "tikkil-current-user";
-
 interface UserContextValue {
   user: Profile | null;
   loading: boolean;
   refreshUser: () => Promise<void>;
-  signIn: (identifier: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (data: SignUpData) => Promise<{ error: string | null }>;
-  signOut: () => void;
-}
-
-interface SignUpData {
-  username: string;
-  display_name: string;
-  identifier: string;
-  password: string;
-  method: "phone" | "email";
+  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, username: string, displayName: string) => Promise<{ error: string | null }>;
+  signOut: () => Promise<void>;
 }
 
 const UserContext = createContext<UserContextValue | null>(null);
-
-// Simple hash for demo auth (not production-grade, but avoids exposing plaintext)
-function simpleHash(s: string): string {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h) + s.charCodeAt(i);
-    h |= 0;
-  }
-  return String(h);
-}
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadUser();
+    initAuth();
   }, []);
 
-  async function loadUser() {
-    const stored = localStorage.getItem(CURRENT_USER_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as Profile;
-        const { data } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", parsed.id)
-          .maybeSingle();
-        if (data) {
-          setUser(data as Profile);
-          localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(data));
-        } else {
-          setUser(parsed);
-        }
-        setLoading(false);
-        return;
-      } catch {
-        // fall through
-      }
+  async function initAuth() {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      await loadProfile(session.user.id);
     }
-    // No stored user — will show auth screen
     setLoading(false);
+
+    supabase.auth.onAuthStateChange((_event, session) => {
+      (async () => {
+        if (session) {
+          await loadProfile(session.user.id);
+        } else {
+          setUser(null);
+        }
+      })();
+    });
+  }
+
+  async function loadProfile(userId: string) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      // Profile might not exist yet if trigger hasn't fired
+      // Wait a moment and retry once
+      await new Promise((r) => setTimeout(r, 500));
+      const { data: retry } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .maybeSingle();
+      if (retry) setUser(retry as Profile);
+      return;
+    }
+
+    if (data) {
+      setUser(data as Profile);
+    } else {
+      // Manually create profile if trigger didn't fire
+      const { data: userData } = await supabase.auth.getUser();
+      const email = userData.user?.email || "";
+      const { data: newProfile } = await supabase
+        .from("profiles")
+        .insert({
+          id: userId,
+          username: email.split("@")[0] || "user_" + userId.slice(0, 8),
+          display_name: email.split("@")[0] || "New User",
+          email,
+        })
+        .select("*")
+        .maybeSingle();
+      if (newProfile) setUser(newProfile as Profile);
+    }
   }
 
   async function refreshUser() {
     if (!user) return;
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (data) {
-      setUser(data as Profile);
-      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(data));
-    }
+    await loadProfile(user.id);
   }
 
-  const signIn = useCallback(async (identifier: string, password: string) => {
-    const hash = simpleHash(password);
-    const isEmail = identifier.includes("@");
-
-    const query = supabase
-      .from("profiles")
-      .select("*")
-      .eq("password_hash", hash)
-      .limit(1);
-
-    if (isEmail) {
-      query.eq("email", identifier.toLowerCase().trim());
-    } else {
-      query.eq("phone", identifier.trim());
-    }
-
-    const { data, error } = await query.maybeSingle();
-
-    if (error || !data) {
-      return { error: "Invalid credentials. Please check your phone/email and password." };
-    }
-
-    setUser(data as Profile);
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(data));
+  const signIn = useCallback(async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: error.message };
     return { error: null };
   }, []);
 
-  const signUp = useCallback(async (signUpData: SignUpData) => {
-    const hash = simpleHash(signUpData.password);
-    const isEmail = signUpData.method === "email";
+  const signUp = useCallback(async (email: string, password: string, username: string, displayName: string) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) return { error: error.message };
 
-    // Check if identifier already exists
-    const checkQuery = supabase.from("profiles").select("id").limit(1);
-    if (isEmail) {
-      checkQuery.eq("email", signUpData.identifier.toLowerCase().trim());
-    } else {
-      checkQuery.eq("phone", signUpData.identifier.trim());
-    }
-    const { data: existing } = await checkQuery.maybeSingle();
-    if (existing) {
-      return { error: `${isEmail ? "Email" : "Phone number"} already registered. Try signing in instead.` };
+    if (data.user) {
+      // Update the auto-created profile with the user's chosen username/display_name
+      await supabase
+        .from("profiles")
+        .update({ username, display_name: displayName })
+        .eq("id", data.user.id);
     }
 
-    // Check username uniqueness
-    const { data: existingUsername } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("username", signUpData.username.trim())
-      .maybeSingle();
-    if (existingUsername) {
-      return { error: "Username already taken. Try another one." };
-    }
-
-    const insertData: Record<string, unknown> = {
-      username: signUpData.username.trim(),
-      display_name: signUpData.display_name.trim(),
-      password_hash: hash,
-      followers_count: 0,
-      verified: false,
-      is_celebrity: false,
-      is_adfree: false,
-      is_admin: false,
-      preferred_language: "en",
-    };
-
-    if (isEmail) {
-      insertData.email = signUpData.identifier.toLowerCase().trim();
-    } else {
-      insertData.phone = signUpData.identifier.trim();
-    }
-
-    const { data, error } = await supabase
-      .from("profiles")
-      .insert(insertData)
-      .select("*")
-      .single();
-
-    if (error) {
-      return { error: error.message };
-    }
-
-    setUser(data as Profile);
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(data));
     return { error: null };
   }, []);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
     setUser(null);
-    localStorage.removeItem(CURRENT_USER_KEY);
   }, []);
 
   return (

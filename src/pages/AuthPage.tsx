@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { Phone, Mail, User, Lock, Sparkles, X, Eye, EyeOff } from "lucide-react";
+import { Mail, User, Lock, Sparkles, X, Eye, EyeOff, Loader2 } from "lucide-react";
 import { useUser } from "@/lib/user-context";
 
 export default function AuthPage() {
   const { signIn, signUp } = useUser();
   const [mode, setMode] = useState<"login" | "signup">("signup");
-  const [method, setMethod] = useState<"phone" | "email">("phone");
-  const [identifier, setIdentifier] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -20,15 +19,15 @@ export default function AuthPage() {
     setLoading(true);
 
     if (mode === "login") {
-      if (!identifier.trim() || !password) {
-        setError("Please enter your phone/email and password.");
+      if (!email.trim() || !password) {
+        setError("Please enter your email and password.");
         setLoading(false);
         return;
       }
-      const { error: err } = await signIn(identifier.trim(), password);
+      const { error: err } = await signIn(email.trim().toLowerCase(), password);
       if (err) setError(err);
     } else {
-      if (!username.trim() || !displayName.trim() || !identifier.trim() || !password) {
+      if (!username.trim() || !displayName.trim() || !email.trim() || !password) {
         setError("Please fill in all fields.");
         setLoading(false);
         return;
@@ -38,13 +37,7 @@ export default function AuthPage() {
         setLoading(false);
         return;
       }
-      const { error: err } = await signUp({
-        username: username.trim(),
-        display_name: displayName.trim(),
-        identifier: identifier.trim(),
-        password,
-        method,
-      });
+      const { error: err } = await signUp(email.trim().toLowerCase(), password, username.trim(), displayName.trim());
       if (err) setError(err);
     }
     setLoading(false);
@@ -52,7 +45,6 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center justify-center p-6">
-      {/* Logo */}
       <div className="mb-8 text-center">
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#00d9a3] to-[#0099ff] flex items-center justify-center mx-auto mb-3 shadow-lg shadow-[#00d9a3]/20">
           <Sparkles size={32} className="text-white" />
@@ -65,9 +57,7 @@ export default function AuthPage() {
         </p>
       </div>
 
-      {/* Form card */}
       <div className="max-w-sm w-full bg-white/5 rounded-3xl border border-white/10 p-6">
-        {/* Mode toggle */}
         <div className="flex gap-2 p-1 rounded-xl bg-white/5 mb-5">
           <button
             onClick={() => { setMode("signup"); setError(null); }}
@@ -86,28 +76,6 @@ export default function AuthPage() {
             Log In
           </button>
         </div>
-
-        {/* Method toggle (signup only) */}
-        {mode === "signup" && (
-          <div className="flex gap-2 p-1 rounded-xl bg-white/5 mb-4">
-            <button
-              onClick={() => { setMethod("phone"); setIdentifier(""); }}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                method === "phone" ? "bg-white/10 text-white" : "text-gray-500"
-              }`}
-            >
-              <Phone size={14} /> Phone
-            </button>
-            <button
-              onClick={() => { setMethod("email"); setIdentifier(""); }}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                method === "email" ? "bg-white/10 text-white" : "text-gray-500"
-              }`}
-            >
-              <Mail size={14} /> Email
-            </button>
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           {mode === "signup" && (
@@ -136,16 +104,12 @@ export default function AuthPage() {
           )}
 
           <div className="relative">
-            {method === "phone" || (mode === "login" && !identifier.includes("@")) ? (
-              <Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-            ) : (
-              <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-            )}
+            <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
-              type={mode === "login" ? "text" : method === "email" ? "email" : "tel"}
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              placeholder={mode === "login" ? "Phone or email" : method === "email" ? "Email address" : "Phone number"}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email address"
               className="w-full pl-10 pr-4 py-3 rounded-xl bg-white/5 text-white text-sm placeholder-gray-500 outline-none border border-white/10 focus:border-[#00d9a3]/50 transition-colors"
             />
           </div>
@@ -178,8 +142,9 @@ export default function AuthPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-xl bg-[#00d9a3] text-black font-semibold text-sm disabled:opacity-40 hover:bg-[#00d9a3]/90 transition-colors"
+            className="w-full py-3 rounded-xl bg-[#00d9a3] text-black font-semibold text-sm disabled:opacity-40 hover:bg-[#00d9a3]/90 transition-colors flex items-center justify-center gap-2"
           >
+            {loading && <Loader2 size={16} className="animate-spin" />}
             {loading ? "Please wait..." : mode === "signup" ? "Create Account" : "Log In"}
           </button>
         </form>
